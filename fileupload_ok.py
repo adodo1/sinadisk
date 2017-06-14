@@ -68,7 +68,7 @@ class YunDisk:
             data = f.read(blocksize)
             msize = len(data)
             # 处理逻辑
-            print index, msize
+            #print index, msize
             pid = self._uploadData(data)
             if (pid != None): result[(index, index+msize)] = pid
             
@@ -119,14 +119,22 @@ class YunDisk:
         files = [('b64_data', ('', b64, ''))]
         
         url = 'http://picupload.service.weibo.com//interface/pic_upload.php?ori=1&mime=image%2Fjpeg&data=base64&url=0&markpos=1&logo=&nick=0&marks=1&app=miniblog'
+
+        logging.info('uploading - size:%d' % len(data))
         result = requests.post(url, files=files, headers=headers, allow_redirects=False)
         # 解析结果
         index = result.text.find('{')
-        if (index < 0): return None
+        if (index < 0):
+            logging.error('uploaded - size:%d' % len(data))
+            return None
         jsonstr = result.text[index:]
         jsonobj = json.loads(jsonstr)
-        if (jsonobj['code'] != 'A00006'): return None
-        else: return jsonobj['data']['pics']['pic_1']['pid']
+        if (jsonobj['code'] != 'A00006'):
+            logging.error('uploaded - size:%d' % len(data))
+            return None
+        else:
+            logging.info('uploaded - size:%d pid:%s' % (len(data), pid))
+            return jsonobj['data']['pics']['pic_1']['pid']
 
     def _uploadData(self, data):
         # 普通上传数据
@@ -141,7 +149,7 @@ class YunDisk:
         files = { 'pic1': fulldata }
         url = 'http://picupload.service.weibo.com/interface/pic_upload.php?cb=http%3A%2F%2Fweibo.com%2Faj%2Fstatic%2Fupimgback.html%3F_wv%3D5%26callback%3DSTK_ijax_14972685830696&url=0&markpos=1&logo=&nick=0&marks=1&app=miniblog&s=rdxt&ori=1'
 
-        logging.debug('uploading, size:%d' % len(data))
+        logging.info('uploading - size:%d' % len(data))
         result = requests.post(url, files=files, headers=headers, allow_redirects=False)
         # 解析结果
         pid = ''
@@ -151,10 +159,10 @@ class YunDisk:
             if (match != None): pid = match.group(1)
         # 验证结果
         if (self._validateData(pid, len(fulldata))):
-            logging.debug('upload success, size:%d pid:%s' % (len(data), pid))
+            logging.info('uploaded - size:%d pid:%s' % (len(data), pid))
             return pid
         else:
-            logging.error('upload faile, size:%d' % len(data))
+            logging.error('uploaded - size:%d' % len(data))
             return None
 
     def _validateData(self, pid, size):
@@ -177,16 +185,17 @@ if __name__ == '__main__':
     print 'sina disk.'
     print 'Encode: %s' %  sys.getdefaultencoding()
 
-    # 设置日志级别
-    logging.basicConfig(level=logging.DEBUG,
+    # 设置日志
+    # CRITICAL > ERROR > WARNING > INFO > DEBUG > NOTSET
+    logging.basicConfig(level=logging.INFO,
                 format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                 datefmt='%a, %d %b %Y %H:%M:%S',
                 filename='fileupload.log',
-                filemode='w')
+                filemode='w+')
 
     console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s: [%(levelname)s] %(message)s', '%H:%M:%S')
     console.setFormatter(formatter)
     logging.getLogger('').addHandler(console)
     
@@ -210,7 +219,7 @@ if __name__ == '__main__':
 
 
     
-
+    logging.shutdown()
     print 'OK.'
 
     
