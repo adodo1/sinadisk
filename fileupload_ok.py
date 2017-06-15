@@ -92,35 +92,7 @@ class YunDisk:
 
 
             
-    def _addNewFile(self, fid, fname):
-        # 向数据库添加一个新文件信息
-        sql = 'select count(*) from FILES where FID=?'
-        args = (fid,)
-        cu = conn.cursor()
-        cu.execute(sql, args)
-        record = cu.fetchone()
-        count = record[0]
-        #
-        fsize = os.path.getsize(fname)
-        fpath, fname = os.path.split(fname)
-        fdate = int(time.time())
-        flag = 0
-        # 
-        if (count == 0):
-            # 添加一条文件记录
-            sql = 'insert into FILES(FID, FNAME, FSIZE, FPATH, FDATE, FLAG) values(?,?,?,?,?,?)'
-            args = (fid, fname, fsize, '/', fdate, flag)
-            cu.execute(sql, args)
-            
-        else:
-            # 更新记录
-            sql = 'update FILES set FID=?, FNAME=?, FSIZE=?, FPATH=?, FDATE=?, FLAG=? where FID=?'
-            args = (fid, fname, fsize, '/', fdate, flag, fid)
-            cu.execute(sql, args)
-        #
 
-        conn.commit()
-        cu.close()
 
     def UploadFile(self, fname):
         # 上传文件 返回文件fid
@@ -131,18 +103,21 @@ class YunDisk:
         if (self._hasFile(fid)): return fid
         # 没有的话创建一条记录和一张文件表
         self._addNewFile(fid, fname)
+        #
+        return self.UploadPart(fid, fname, 0, -1)
         
-        
-        #return self.UploadPart(fname, 0, -1)
-        pass
 
-    def UploadPart(self, fname, start, size):
+    def UploadPart(self, fid, fname, start, size):
         # 分段上传 返回文件fid
         # fname: 文件名
         # start: 开始位置
         # size: 读取大小
-        f = open(fname, 'rb')
 
+        if (fid == None or fid == ''): return None
+        # 加上逻辑 如果没有文件块表创建
+        
+        
+        f = open(fname, 'rb')
         # 获取文件的大小
         f.seek(0, io.SEEK_END)
         fsize = f.tell()
@@ -158,10 +133,24 @@ class YunDisk:
         # 跳转到开始位置
         f.seek(start)
 
-        result = { }
-        
+        #
+        #result = {
+        #    'fid': '',
+        #    'blocks': [
+        #        {'pid': '', 'range':[0, 100], 'error': '', 'head': 82},
+        #        {'pid': '', 'range':[100, 200], 'error': '', 'head': 82}
+        #    ]
+        #}
+        result = {
+            'fid': fid,
+            'fsize': fsize,
+            'blocks': [ ]
+        }
+
+        num = 0
         while (True):
             #
+            num += 1
             index = f.tell()
             if (index >= end): break
             blocksize = self.BLOCK_SIZE     # 本次读取的块大小
@@ -170,24 +159,58 @@ class YunDisk:
             
             data = f.read(blocksize)
             msize = len(data)
-            # 处理逻辑
-            #print index, msize
-            pid = self._uploadData(data)
-            if (pid != None): result[(index, index+msize)] = pid
             
-            # 判断是否继续循环
-            #if (msize < blocksize): break
+            # 处理逻辑 print index, msize
+            # --------------------------------------------------------------
+            # 先判断数据库里是否已经有上传好的数据
+            # 如果已经有上传跳过
+            block = self._hasPart(fid, index, index + msize)
+            if (block != None):
+                result['blocks'].append(block)
+                continue
+
+            #
+            logging.info('uploading - fid:%s num:%d [%d, %d]' % (fid, num, index, index+msize))
+            pid = self._uploadData(data)
+            if (pid != None):
+                # 成功
+                block = {'pid': pid, 'range':[index, index+msize], 'error': '', 'head': self.HEADER_SIZE}
+                result['blocks'].append(block)
+                self._insertPart(fid, pid, index, index+msize, self.HEADER_SIZE, 100)   # 插入数据库
+            else:
+                # 失败
+                block = {'pid': '', 'range':[index, index+msize], 'error': 'upload fail.', 'head': self.HEADER_SIZE}
+                result['blocks'].append(block)
+                self._insertPart(fid, '', index, index+msize, self.HEADER_SIZE, 0)      # 插入数据库
+            
+            # --------------------------------------------------------------
 
         # 返回上传结果
         return result
 
+
+
     def DownloadFile(self, fid):
         # 下载文件
+        
         pass
 
     def DownloadPart(self, fid, start, size):
         # 下载流文件 或者下载分段
+
+        #result = [
+        #    {'pid': '', 'range': [0, 100], 'head': 82},
+        #    {'pid': '', 'range': [100, 200], 'head': 82}
+        #         ]
+        # 先从数据库取出数据
+        blocks = self._fetchData(fid, start, start + size)
+        # 检查数据完整性构造下载队列
+        
+        
         pass
+
+    def _buildDownloadTask(self, blocks):
+        # 检查
 
     def GetQuota(self):
         # 获取空间大小
@@ -205,6 +228,11 @@ class YunDisk:
         # 搜索文件
         pass
 
+
+
+    # -------------------------------------------------------------------
+    # -------------------------------------------------------------------
+    # -------------------------------------------------------------------
     # -------------------------------------------------------------------
     def _uploadDataBase64(self, data):
         # 上传数据 用Base64的方法
@@ -252,7 +280,6 @@ class YunDisk:
         files = { 'pic1': fulldata }
         url = 'http://picupload.service.weibo.com/interface/pic_upload.php?cb=http%3A%2F%2Fweibo.com%2Faj%2Fstatic%2Fupimgback.html%3F_wv%3D5%26callback%3DSTK_ijax_14972685830696&url=0&markpos=1&logo=&nick=0&marks=1&app=miniblog&s=rdxt&ori=1'
 
-        logging.info('uploading - size:%d' % len(data))
         result = requests.post(url, files=files, headers=headers, allow_redirects=False)
         # 解析结果
         pid = ''
@@ -288,7 +315,7 @@ class YunDisk:
             if not b : break
             fhash.update(b)
         f.close()
-        fmd5 = fhash.hexdigest()
+        fmd5 = fhash.hexdigest().lower()
         logging.info('md5 - %s: %s', fmd5, fname)
         return fmd5
     
@@ -302,7 +329,131 @@ class YunDisk:
         cu.close()
         if (record): return record[0] == 100
         else: return False
+        
+    def _addNewFile(self, fid, fname):
+        # 向数据库添加一个新文件信息
+        sql = 'select count(*) from FILES where FID=?'
+        args = (fid,)
+        cu = conn.cursor()
+        cu.execute(sql, args)
+        record = cu.fetchone()
+        count = record[0]
+        #
+        fsize = os.path.getsize(fname)
+        fpath, fname = os.path.split(fname)
+        fdate = int(time.time())
+        flag = 0
+        ftable = '_' + fid
+        # 
+        if (count == 0):
+            # 添加一条文件记录
+            sql = 'insert into FILES(FID, FNAME, FSIZE, FPATH, FDATE, FLAG) values(?,?,?,?,?,?)'
+            args = (fid, fname, fsize, '/', fdate, flag)
+            cu.execute(sql, args)
+            
+        else:
+            # 更新记录
+            sql = 'update FILES set FID=?, FNAME=?, FSIZE=?, FPATH=?, FDATE=?, FLAG=? where FID=?'
+            args = (fid, fname, fsize, '/', fdate, flag, fid)
+            cu.execute(sql, args)
+        # 创建文件块信息表
+        sql = """
+                CREATE TABLE IF NOT EXISTS [{0}] (
+                  [PID] CHAR(40), 
+                  [FSTART] INT, 
+                  [FEND] INT, 
+                  [HEADSIZE] INT, 
+                  [PDATE] INT, 
+                  [FLAG] INT)
+              """.format(ftable)
+        cu.execute(sql)
+        #
+        conn.commit()
+        cu.close()
+        
+    def _hasPart(self, fid, start, end):
+        # 判断数据库里是否已经有 如果有而且状态为[100]就跳过
+        ftable = '_' + fid
+        sql = 'select PID, FSTART, FEND, HEADSIZE, PDATE, FLAG from {0} where FSTART=? and FEND=?'.format(ftable)
+        args = (start,end)
+        cu = conn.cursor()
+        cu.execute(sql, args)
+        record = cu.fetchone()
+        cu.close()
 
+        if (record):
+            pid = record[0]
+            start = record[1]
+            end = record[2]
+            headsize = record[3]
+            pdate = record[4]
+            flag = record[5]
+            if (flag == 100):
+                block = {'pid': pid, 'range':[start, end], 'error': '', 'head': headsize}
+                return block
+        # 否则返回空
+        return None
+        
+    def _insertPart(self, fid, pid, start, end, headsize, flag):
+        # 插入块信息
+        ftable = '_' + fid
+        pdate = int(time.time())
+        
+        sql = 'select FLAG from {0} where FSTART=? and FEND=?'.format(ftable)
+        args = (start, end)
+        cu = conn.cursor()
+        cu.execute(sql, args)
+        record = cu.fetchone()
+        #
+        if (record):
+            # 更新原有记录
+            sql = 'update {0} set PID=?, HEADSIZE=?, PDATE=?, FLAG=? where FSTART=? and FEND=?'.format(ftable)
+            args = (pid, headsize, pdate, flag, start, end)
+            cu.execute(sql, args)
+            conn.commit()
+        else:
+            # 插入新纪录
+            sql = 'insert into {0}(PID, FSTART, FEND, HEADSIZE, PDATE, FLAG) values(?,?,?,?,?,?)'.format(ftable)
+            args = (pid, start, end, headsize, pdate, flag)
+            cu.execute(sql, args)
+            conn.commit()
+        #
+        cu.close()
+
+    def _fetchData(self, fid, start, end):
+        # 从数据库获取记录
+        # 注意 [start, end) 不包含end
+        ftable = '_' + fid
+        sql = 'select count(*) from FILES where FID=?'
+        args = (fid,)
+        cu = conn.cursor()
+        cu.execute(sql, args)
+        record = cu.fetchone()
+        if (record[0] == 0): return []
+
+        # 取出记录
+        #result = [
+        #    {'pid': '', 'range': [0, 100], 'head': 82},
+        #    {'pid': '', 'range': [100, 200], 'head': 82}
+        #         ]
+        result = []
+        sql = 'select PID, FSTART, FEND, HEADSIZE, PDATE from {0} where FLAG=100 ' \
+              'and FSTART<? and FEND>=? order by FSTART'.format(ftable)
+        args = (end, start)
+        cu.execute(sql, args)
+        records = cu.fetchall()
+        for row in records:
+            # 遍历记录
+            pid = row[0]
+            fstart = row[1]
+            fend = row[2]
+            headsize = row[3]
+            pdate = row[4]
+            block = {'pid': pid, 'range': [fstart, fend], 'head': headsize}
+            result.append(block)
+        cu.close()
+        #
+        return result
 
 ##########################################################################
 ##########################################################################
@@ -319,7 +470,7 @@ if __name__ == '__main__':
                 format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                 datefmt='%a, %d %b %Y %H:%M:%S',
                 filename='fileupload.log',
-                filemode='w+')
+                filemode='a')
 
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
@@ -353,7 +504,7 @@ if __name__ == '__main__':
     #result = disk.UploadFile('./data/data.rar')
 
 
-    disk.UploadFile('./data/data.rar')
+    #r = disk.UploadFile('./data/test2.avi')
     
     logging.shutdown()
     print 'OK.'

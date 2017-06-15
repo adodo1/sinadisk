@@ -15,7 +15,9 @@ CREATE TABLE [TEMPLATE] (
   [FSTART] INT, 
   [FEND] INT, 
   [HEADSIZE] INT, 
-  [PTIME] INT);
+  [PDATE] INT, 
+  [FLAG] INT);
+
 
 
 
