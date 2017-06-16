@@ -244,6 +244,7 @@ if __name__ == '__main__':
     '''
 
     
+    '''
     # 上传测试
     f = open('./data.zip', 'rb')
     data = f.read()
@@ -251,7 +252,7 @@ if __name__ == '__main__':
     #print UploadData3(data)
     UploadData2(data)
     #print 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
-    
+    '''
 
     '''
     # 断点下载测试
@@ -261,6 +262,8 @@ if __name__ == '__main__':
     f.write(d)
     f.close()
     '''
+
+    download_file('')
 
     #download_file('')
     #support_continue('http://ww1.sinaimg.cn/large/6d44131cgy1fgjld5vsqvj2001001qv7.jpg')

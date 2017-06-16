@@ -192,25 +192,77 @@ class YunDisk:
 
     def DownloadFile(self, fid):
         # 下载文件
+        return self.DownloadPart(fid, 0, -1)
         
         pass
 
     def DownloadPart(self, fid, start, size):
         # 下载流文件 或者下载分段
-
+        # size: 小于0返回数据到结束
+        
         #result = [
         #    {'pid': '', 'range': [0, 100], 'head': 82},
         #    {'pid': '', 'range': [100, 200], 'head': 82}
         #         ]
         # 先从数据库取出数据
-        blocks = self._fetchData(fid, start, start + size)
+        if (size == 0): return None
+        if (size < 0): end = -1
+        else: end = start + size
+        blocks = self._fetchData(fid, start, end)
         # 检查数据完整性构造下载队列
-        
-        
-        pass
+        tasks = self._buildDownloadTask(blocks, start, end)
+        if (tasks == None): return None
 
-    def _buildDownloadTask(self, blocks):
-        # 检查
+        # 下载文件
+        writer = open('./data/aa.rar', 'wb')
+        self._doTasks(tasks, writer, 4096)
+        writer.flush()
+        writer.close()
+
+        print '@@@@@@@@@@@@@@'
+        
+        #
+        return tasks
+
+    def _doTasks(self, tasks, writer, buff):
+        # 下载任务
+        # tasks: 任务列表
+        # writer: 输出流
+        # buff: 每隔多少刷新一次
+        #tasks = {
+        #    'size': 0,
+        #    'start': 0,
+        #    'tasks': [
+        #        {'pid': '', 'index': 0, 'range': [0, 0]},
+        #        {'pid': '', 'index': 1, 'range': [0, 0]}
+        #    ]
+        #}
+        # 按照index排序
+        size = tasks['size']
+        tasklist = tasks['tasks']
+        tasklist.sort(key=lambda item:item['index'], reverse=False)
+        index = 0
+        for task in tasklist:
+            # 循环任务
+            index = index + 1
+            pid = task['pid']
+            index = task['index']
+            start = task['range'][0]
+            end = task['range'][1]
+            #
+            logging.info('downloading - [%d/%d] pid:%s [%d, %d]' % (index, len(tasklist), pid, start, end))
+            
+            url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
+            headers = { 'Range': 'bytes=%d-%d' % (start, end) }
+            r = requests.get(url, headers = headers, stream=True)
+            #
+            for chunk in r.iter_content(chunk_size=buff):
+                # 分块下载
+                if chunk: # filter out keep-alive new chunks
+                    writer.write(chunk)
+                    writer.flush()
+                    
+            logging.info('downloaded - pid:%s' % pid)
 
     def GetQuota(self):
         # 获取空间大小
@@ -423,6 +475,7 @@ class YunDisk:
     def _fetchData(self, fid, start, end):
         # 从数据库获取记录
         # 注意 [start, end) 不包含end
+        # end 小于0返回到文件末尾
         ftable = '_' + fid
         sql = 'select count(*) from FILES where FID=?'
         args = (fid,)
@@ -438,8 +491,8 @@ class YunDisk:
         #         ]
         result = []
         sql = 'select PID, FSTART, FEND, HEADSIZE, PDATE from {0} where FLAG=100 ' \
-              'and FSTART<? and FEND>=? order by FSTART'.format(ftable)
-        args = (end, start)
+              'and (FSTART<? or ?<0) and FEND>=? order by FSTART desc'.format(ftable)
+        args = (end, end, start)
         cu.execute(sql, args)
         records = cu.fetchall()
         for row in records:
@@ -454,6 +507,67 @@ class YunDisk:
         cu.close()
         #
         return result
+
+    def _buildDownloadTask(self, blocks, start, end):
+        # 检查 和 构造下载任务
+        # 数据必须是连续的 否则返回空
+        #tasks = {
+        #    'size': 0,
+        #    'start': 0,
+        #    'tasks': [
+        #        {'pid': '', 'index': 0, 'range': [0, 0]},
+        #        {'pid': '', 'index': 1, 'range': [0, 0]}
+        #    ]
+        #}
+        tasks = {
+            'size': 0,
+            'start': start,
+            'tasks': [ ]
+        }
+        # 按照块的开始排序 块必须 收尾相接 否则返回错误
+        blocks.sort(key=lambda item:item['range'][0], reverse=False)
+        index = 0
+        lastbs = 0
+        size = 0
+        for block in blocks:
+            bs = block['range'][0]
+            be = block['range'][1]
+            pid = block['pid']
+            head = block['head']
+
+            # 文件相对偏移量
+            offsets = head
+            offsete = head + be - bs
+            
+            # 计算偏移量 ~乱
+            if (be <= start):
+                # 1. 不在范围内
+                continue
+            elif (bs < end):
+                # 2. 落在块区间里 计算相对偏移量
+                if (bs < start): offsets += start - bs
+                if (be > end): offsete -= be - end
+            elif (bs >= end):
+                # 3. 不在范围内
+                pass
+            else: 
+                # 4. 考虑不周
+                raise Exception()
+
+            #
+            index += 1
+            task = {'pid': pid, 'index': index, 'range': [offsets, offsete]}
+            if (lastbs > 0 and lastbs != bs):
+                # 数据不连续返回空
+                return None
+            
+            # 添加一条任务
+            size += offsete - offsets
+            tasks['tasks'].append(task)
+            
+        tasks['size'] = size
+        
+        return tasks
 
 ##########################################################################
 ##########################################################################
@@ -503,8 +617,22 @@ if __name__ == '__main__':
     #上传测试
     #result = disk.UploadFile('./data/data.rar')
 
-
+    # 测试下载
     #r = disk.UploadFile('./data/test2.avi')
+    #r = disk.DownloadFile('8edf97bca7f31f6fbf9e4571f214d558')
+    #r = disk.DownloadPart('8edf97bca7f31f6fbf9e4571f214d558', 10, 3*1024*1024)
+    #print json.dumps(r)
+
+    r = disk.DownloadFile('8edf97bca7f31f6fbf9e4571f214d558')
+    print json.dumps(r)
+
+
+    #url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format('81d9973cgy1fgn6w91rtrj20010011ky')
+    #headers = { 'Range': 'bytes=%d-%d' % (82, 100) }
+    #r = requests.get(url, headers = headers, stream=True)
+    #for data in r.iter_content(chunk_size=10):
+    #    print len(data)
+    
     
     logging.shutdown()
     print 'OK.'
