@@ -571,14 +571,20 @@ class YunDisk:
             
             # HTTP 200 获取全部数据
             # HTTP 206 获取部分数据
-            # 为了保证返回数据正确 先请求一次数据头
+            
+            # 为了保证返回数据正确 尝试3次请求 如果得不到206结果抛出异常
             r = requests.get(url, headers = headers, stream=True)
-            r.close()
-
-            # 再正式请求数据
-            r = requests.get(url, headers = headers, stream=True)
-            # 判断状态
-            print r.status_code
+            if (r.status_code != 206):
+                r.close()
+                # 第二次请求
+                r = requests.get(url, headers = headers, stream=True)
+                if (r.status_code != 206):
+                    r.close()
+                    # 第三次请求
+                    r = requests.get(url, headers = headers, stream=True)
+                    if (r.status_code != 206):
+                        r.close()
+                        raise Exception()
             
             #
             content_range = r.headers['Content-Range']
@@ -667,7 +673,7 @@ if __name__ == '__main__':
     #print pid
 
     #上传测试
-    result = disk.UploadFile('./data/test.jpg')
+    #result = disk.UploadFile('./data/cn_windows_10_multiple_editions_version_1511_x64_dvd_7223622.iso')
 
     # 测试下载
     #r = disk.UploadFile('./data/test2.avi')
@@ -675,8 +681,8 @@ if __name__ == '__main__':
     #r = disk.DownloadPart('8edf97bca7f31f6fbf9e4571f214d558', 10, 3*1024*1024)
     #print json.dumps(r)
 
-    #r = disk.DownloadFile('f6af94d1637d0d9a9e2bcc293db032da')
-    #print json.dumps(r)
+    r = disk.DownloadFile('15b3029330e992feaa11d930b90e6665')
+    print len(r)
 
 
     #url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format('81d9973cgy1fgn6w91rtrj20010011ky')
