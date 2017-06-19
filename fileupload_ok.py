@@ -76,9 +76,10 @@ class YunDisk:
                 '0000000A4944415408D7636000000002' \
                 '0001E221BC330000000049454E44AE42' \
                 '6082'.decode('hex')
-    # 数据头大小
-    HEADER_SIZE = len(BASE_DATA)
-            
+    #
+    HEADER_SIZE = len(BASE_DATA)    # 数据头大小
+    OUT_PATH = './download/'        # 下载路径
+    MAX_THREADS = 4                 # 最大下载线程
     
     def __init__(self, cookie, conn):
         # 上传才需要cookie
@@ -88,11 +89,9 @@ class YunDisk:
 
     def Init(self):
         # 初始化
+        if os.path.exists(self.OUT_PATH) == False:
+            os.makedirs(self.OUT_PATH)
         pass
-
-
-            
-
 
     def UploadFile(self, fname):
         # 上传文件 返回文件fid
@@ -189,10 +188,13 @@ class YunDisk:
         # 返回上传结果
         return result
 
+        
 
 
-    def DownloadFile(self, fid):
+    def DownloadFile(self, fid, fast=False):
         # 下载文件
+        # fid: 文件FID
+        # fast: 使用多线程下载
         fileinfo = self._fileInfo(fid)
         if (fileinfo == None): return None
         fname = fileinfo['name']
@@ -201,17 +203,20 @@ class YunDisk:
         fdate = fileinfo['date']
         flag = fileinfo['flag']
 
-        writer = open('./download/' + fname, 'wb')
-        tasks = self.DownloadPart(writer, fid, 0, -1)
+        writer = open(self.OUT_PATH + fname, 'wb')
+        tasks = self.DownloadPart(writer, fid, 0, -1, fast)
         writer.flush()
         writer.close()
 
         return tasks
 
 
-    def DownloadPart(self, writer, fid, start, size):
+    def DownloadPart(self, writer, fid, start, size, fast=False):
         # 下载流文件 或者下载分段
+        # fid: 文件FID
+        # start: 开始偏移量
         # size: 小于0返回数据到结束
+        # fast: 使用多线程下载
         
         #result = [
         #    {'pid': '', 'range': [0, 100], 'head': 82},
@@ -222,15 +227,119 @@ class YunDisk:
         if (size < 0): end = -1
         else: end = start + size
         blocks = self._fetchData(fid, start, end)
+        
         # 检查数据完整性构造下载队列
         tasks = self._buildDownloadTask(blocks, start, end)
         if (tasks == None): return None
         
         # 下载并且放到输出流中 --
-        self._doTasks(tasks, writer, 4096)
+        if (fast == False): self._doTasks(fid, tasks, writer, 4096)
+        else: self._doTasksFast(fid, tasks, writer, 4096)
         
         #
         return tasks
+
+    def _doTasksFast(self, fid, tasks, writer, buff):
+        # 下载任务
+        # fid: 文件FID
+        # tasks: 任务列表
+        # writer: 输出流
+        # buff: 每隔多少刷新一次
+        #tasks = {
+        #    'size': 0,
+        #    'start': 0,
+        #    'tasks': [
+        #        {'pid': '', 'index': 0, 'range': [0, 0]},
+        #        {'pid': '', 'index': 1, 'range': [0, 0]}
+        #    ]
+        #}
+        # 按照index排序
+        size = tasks['size']
+        tasklist = tasks['tasks']
+        tasklist.sort(key=lambda item:item['index'], reverse=False)
+
+        # 初始化多线程
+        worker = WorkerPool(self.MAX_THREADS)
+
+        # 1. 下载分块文件
+        # 2. 把分块文件拼起来
+        
+        for task in tasklist:
+            # 循环任务
+            pid = task['pid']
+            index = task['index']
+            start = task['range'][0]
+            end = task['range'][1]
+            
+            # 添加任务到线程池里
+            worker.add_job(self._downloadBlock, fid, pid, index, start, end)
+
+        # 等待线程结束
+        worker.wait_for_complete()
+
+        # 检查和拼接数据
+        result = self._unionData(fid, tasklist, writer)
+        
+
+    def _unionData(self, fid, tasks, writer):
+        # 检查块文件完整性 拼接数据
+        for task in tasks:
+            pid = task['pid']
+            index = task['index']
+            #
+            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+            if (os.path.exists(blockfile) == False): return False           # 块文件缺少
+        # 拼接数据
+        for task in tasks:
+            pid = task['pid']
+            index = task['index']
+            #
+            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+            f = open(blockfile, 'rb')
+            data = f.read()
+            f.close()
+            writer.write(data)
+            writer.flush
+
+            # 删除块文件
+            os.remove(blockfile)
+        #
+        return True
+
+    def _downloadBlock(self, fid, pid, index, start, end):
+        # 下载文件分块线程
+        url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
+        blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+
+        # 如果已经有块文件跳过
+        if (os.path.exists(blockfile)): return True
+
+        logging.info('downloading - index:%05d fid:%s pid:%s' % (index, fid, pid))
+        
+        # 下载文件
+        headers = { 'Range': 'bytes=%d-%d' % (start, end) }
+        response = requests.get(url, headers=headers, stream=True)
+        data = response.raw.read()
+        if (response.status_code == 200):
+            # 截取有效数据
+            data = data[start : end]
+        elif (response.status_code == 206):
+            # 有效数据
+            pass
+        else:
+            # 返回结果错误
+            return False
+
+        # 检查数据长度
+        if (len(data) != end - start): return False
+
+        # 数据写入块文件
+        f = open(blockfile, 'wb')
+        f.write(data)
+        f.close()
+        return True
+        
+            
 
 
     def GetQuota(self):
@@ -538,7 +647,7 @@ class YunDisk:
         
         return tasks
     
-    def _doTasks(self, tasks, writer, buff):
+    def _doTasks(self, fid, tasks, writer, buff):
         # 下载任务
         # tasks: 任务列表
         # writer: 输出流
@@ -681,7 +790,7 @@ if __name__ == '__main__':
     #r = disk.DownloadPart('8edf97bca7f31f6fbf9e4571f214d558', 10, 3*1024*1024)
     #print json.dumps(r)
 
-    r = disk.DownloadFile('15b3029330e992feaa11d930b90e6665')
+    r = disk.DownloadFile('56d0dbbb19caf374c9a6c565158d1ca0', True)
     print len(r)
 
 
