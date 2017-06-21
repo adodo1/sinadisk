@@ -8,12 +8,14 @@ Last modified:  2012-03-13 23:00
 Description:
 """
 import os, io, sys, math, requests, json, re, base64, logging
-import time, ctypes, socket, threading, json, Queue, sqlite3, hashlib
+import time, ctypes, socket, threading, json, Queue, sqlite3, hashlib, traceback
 from threading import Thread
 
 from random import randint
 from BaseHTTPServer import HTTPServer
 from SimpleHTTPServer import SimpleHTTPRequestHandler
+from SocketServer import ThreadingMixIn
+
 
 __mutex = threading.Lock()        # 线程锁
 
@@ -673,6 +675,7 @@ class YunDisk:
             
             # HTTP 200 获取全部数据
             # HTTP 206 获取部分数据
+
             
             # 为了保证返回数据正确 尝试3次请求 如果得不到206结果抛出异常
             r = requests.get(url, headers = headers, stream=True)
@@ -711,19 +714,77 @@ class YunDisk:
             for chunk in r.iter_content(chunk_size=buff):
                 # 分块下载
                 if chunk: # filter out keep-alive new chunks
+                    if (len(chunk) <= 0): print 'bad00000000000000000000'
                     writer.write(chunk)
-                    #writer.flush()
-                    
+                    writer.flush()
+            
+
+            '''
+            # 为了保证返回数据正确 尝试3次请求 如果得不到206结果抛出异常
+            r = requests.get(url, headers = headers, stream=True)
+            if (r.status_code != 206):
+                r.close()
+                # 第二次请求
+                r = requests.get(url, headers = headers, stream=True)
+                if (r.status_code != 206):
+                    r.close()
+                    # 第三次请求
+                    r = requests.get(url, headers = headers, stream=True)
+                    if (r.status_code != 206):
+                        r.close()
+
+            # 读取数据
+            if (r.status_code == 200):
+                # 返回结果200需要自己过滤有效数据
+                index = 0
+                for chunk in r.iter_content(chunk_size=buff):
+                    # 分块下载
+                    if chunk: # filter out keep-alive new chunks
+                        size = len(chunk)
+
+                        data = None
+
+                        newstart = 0
+                        newend = size
+
+                        # 算法没有验证过 没有做过仔细检查
+                        if (end <= index):
+                            # 已经结束 不在范围内
+                            break
+                        elif (start < index+size):
+                            # 落在区间内
+                            if (start > index): newstart = start - index
+                            if (end < index+size): newend = index+size - end
+                        elif (start >= index+size):
+                            # 还没开始
+                            continue
+                        else:
+                            # 考虑不周
+                            raise Exception()
+                        
+                        data = chunk[newstart : newend]
+                        
+                        writer.write(data)
+                        writer.flush()
+                pass
+            elif (r.status_code == 206):
+                # 返回结果200数据已经过滤好了 直接写入流里
+                for chunk in r.iter_content(chunk_size=buff):
+                    # 分块下载
+                    if chunk: # filter out keep-alive new chunks
+                        writer.write(chunk)
+                        writer.flush()
+                
+            '''
+
+            
             logging.info('downloaded - pid:%s' % pid)
 
     def _fileInfo(self, fid):
         # 获取文件信息
         sql = 'select FID, FNAME, FSIZE, FPATH, FDATE, FLAG from FILES where FID=?'
         args = (fid,)
-        try:
-            cu = self._conn.cursor()
-        except Exception, ex:
-            print ex
+        cu = self._conn.cursor()
         cu.execute(sql, args)
         record = cu.fetchone()
         cu.close()
@@ -800,6 +861,8 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
         fsize = fileinfo['size']
 
         print fsize
+
+        print 'HHHHHHHHHHHH', self.headers
         
         if self.headers.get("Range"):
             # partial content all treated here.
@@ -836,22 +899,52 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
                 disk.DownloadPart(self.wfile, '9877a218a82dad5e12e3484a00c75bc1', pos, -1)
             except Exception, ex:
                 print ex
+                print traceback.print_exc()
             
             print 'hhhh'
             return None
 
+        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
+        
+
+        #try:
+        
         self.send_response(200)
+        print '###########################1'
         self.send_header("Content-type", ctype)
+        print '###########################2'
         self.send_header("Content-Length", str(fsize))
+        print '###########################3'
         self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+        print '###########################4'
+
+        '''
+        except Exception, ex:
+            print 'bbaadd', ex
+            print traceback.print_exc()
+        '''
+
+        
         self.end_headers()
+
         return None
 
+class ThreadingServer(ThreadingMixIn, HTTPServer):
+    # 多线程
+    pass
 
 def main(port, server_class=NotracebackServer, handler_class=PartialContentHandler):
     server_address = ('0.0.0.0', port)
+    # 单线程
     httpd = server_class(server_address, handler_class)
     httpd.serve_forever()
+    # 多线程
+    #srvr = ThreadingServer(server_address, handler_class)
+    #srvr.serve_forever()
 
 
 if __name__ == "__main__":
