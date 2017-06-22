@@ -227,6 +227,7 @@ class YunDisk:
         if (size < 0): end = -1
         else: end = start + size
         blocks = self._fetchData(fid, start, end)
+
         
         # 检查数据完整性构造下载队列
         tasks = self._buildDownloadTask(blocks, start, end)
@@ -524,13 +525,13 @@ class YunDisk:
             if (be <= start):
                 # 1. 不在范围内
                 continue
-            elif (bs < end):
+            elif (bs < end or end < 0):
                 # 2. 落在块区间里 计算相对偏移量
                 if (bs < start): offsets += start - bs
-                if (be > end): offsete -= be - end
-            elif (bs >= end):
+                if (be > end and end >= 0): offsete -= be - end
+            elif (bs >= end and end >= 0):
                 # 3. 不在范围内
-                pass
+                continue
             else: 
                 # 4. 考虑不周
                 raise Exception()
@@ -594,7 +595,7 @@ class YunDisk:
                     r.close()
                     # 第三次请求
                     r = requests.get(url, headers = headers, stream=True)
-                    if (r.status_code != 206):
+                    if (r.status_code != 206 and r.status_code != 200):
                         r.close()
 
             # 读取数据
@@ -627,17 +628,35 @@ class YunDisk:
                             raise Exception()
                         
                         data = chunk[newstart : newend]
-                        
-                        writer.write(data)
-                        writer.flush()
-                pass
+
+                        try:
+                            writer.write(data)
+                            #writer.flush()
+                        except socket.error:
+                            logging.error('req terminated - pid:%s' % pid)
+                            r.close()
+                            break
+                        except Exception, ex:
+                            logging.error('%s - pid:%s' % (ex, pid))
+                            r.close()
+                            break
+            # 读取206数据
             elif (r.status_code == 206):
                 # 返回结果200数据已经过滤好了 直接写入流里
                 for chunk in r.iter_content(chunk_size=buff):
                     # 分块下载
                     if chunk: # filter out keep-alive new chunks
-                        writer.write(chunk)
-                        writer.flush()
+                        try:
+                            writer.write(chunk)
+                            #writer.flush()
+                        except socket.error:
+                            logging.error('req terminated - pid:%s' % pid)
+                            r.close()
+                            break
+                        except Exception, ex:
+                            logging.error('%s - pid:%s' % (ex, pid))
+                            r.close()
+                            break
                 
             
             
@@ -830,13 +849,15 @@ if __name__ == '__main__':
     #print pid
 
     #上传测试
-    #result = disk.UploadFile('./data/MIJIAN3.avi')
+    #result = disk.UploadFile('./data/test.mp4')
 
     # 测试下载
     #r = disk.UploadFile('./data/test2.avi')
     #r = disk.DownloadFile('8edf97bca7f31f6fbf9e4571f214d558')
-    #r = disk.DownloadPart('8edf97bca7f31f6fbf9e4571f214d558', 10, 3*1024*1024)
-    #print json.dumps(r)
+    f = open('./download/out.dat', 'wb')
+    r = disk.DownloadPart(f, '0fc94e8db8673e35daa73265db28430f', 0, -1)
+    print json.dumps(r)
+    f.close()
 
     #r = disk.DownloadFile('7ae56bde1c88a678a0010004bbf5ff2c', True)
     #print len(r)

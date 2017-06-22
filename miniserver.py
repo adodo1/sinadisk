@@ -182,135 +182,23 @@ class YunDisk:
         #    {'pid': '', 'range': [100, 200], 'head': 82}
         #         ]
         # 先从数据库取出数据
-        print size
         if (size == 0): return None
         if (size < 0): end = -1
         else: end = start + size
-
-        end = 1261079015
-        
-
-        print 'iiii'
         blocks = self._fetchData(fid, start, end)
 
-        print len(blocks)
         
         # 检查数据完整性构造下载队列
         tasks = self._buildDownloadTask(blocks, start, end)
         if (tasks == None): return None
-
-        print 'kkk', len(tasks)
         
         # 下载并且放到输出流中 --
         if (fast == False): self._doTasks(fid, tasks, writer, 4096)
         else: self._doTasksFast(fid, tasks, writer, 4096)
-
-        print 'llll'
+        
         #
         return tasks
 
-    def _doTasksFast(self, fid, tasks, writer, buff):
-        # 下载任务
-        # fid: 文件FID
-        # tasks: 任务列表
-        # writer: 输出流
-        # buff: 每隔多少刷新一次
-        #tasks = {
-        #    'size': 0,
-        #    'start': 0,
-        #    'tasks': [
-        #        {'pid': '', 'index': 0, 'range': [0, 0]},
-        #        {'pid': '', 'index': 1, 'range': [0, 0]}
-        #    ]
-        #}
-        # 按照index排序
-        size = tasks['size']
-        tasklist = tasks['tasks']
-        tasklist.sort(key=lambda item:item['index'], reverse=False)
-
-        
-
-        # 初始化多线程
-        worker = WorkerPool(self.MAX_THREADS)
-
-        # 1. 下载分块文件
-        # 2. 把分块文件拼起来
-        
-        for task in tasklist:
-            # 循环任务
-            pid = task['pid']
-            index = task['index']
-            start = task['range'][0]
-            end = task['range'][1]
-            
-            # 添加任务到线程池里
-            worker.add_job(self._downloadBlock, fid, pid, index, start, end)
-
-        # 等待线程结束
-        worker.wait_for_complete()
-
-        # 检查和拼接数据
-        result = self._unionData(fid, tasklist, writer)
-        
-
-    def _unionData(self, fid, tasks, writer):
-        # 检查块文件完整性 拼接数据
-        for task in tasks:
-            pid = task['pid']
-            index = task['index']
-            #
-            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
-            if (os.path.exists(blockfile) == False): return False           # 块文件缺少
-        # 拼接数据
-        for task in tasks:
-            pid = task['pid']
-            index = task['index']
-            #
-            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
-            f = open(blockfile, 'rb')
-            data = f.read()
-            f.close()
-            writer.write(data)
-            writer.flush
-
-            # 删除块文件
-            os.remove(blockfile)
-        #
-        return True
-
-    def _downloadBlock(self, fid, pid, index, start, end):
-        # 下载文件分块线程
-        url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
-        blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
-
-        # 如果已经有块文件跳过
-        if (os.path.exists(blockfile)): return True
-
-        logging.info('downloading - index:%05d fid:%s pid:%s' % (index, fid, pid))
-        
-        # 下载文件
-        headers = { 'Range': 'bytes=%d-%d' % (start, end) }
-        response = requests.get(url, headers=headers, stream=True)
-        data = response.raw.read()
-        if (response.status_code == 200):
-            # 截取有效数据
-            data = data[start : end]
-        elif (response.status_code == 206):
-            # 有效数据
-            pass
-        else:
-            # 返回结果错误
-            return False
-
-        # 检查数据长度
-        if (len(data) != end - start): return False
-
-        # 数据写入块文件
-        f = open(blockfile, 'wb')
-        f.write(data)
-        f.close()
-        return True
-        
             
 
 
@@ -320,14 +208,13 @@ class YunDisk:
 
     def GetMeta(self, fid):
         # 获取文件元信息
-        # fid: 文件FID
         fileinfo = self._fileInfo(fid)
-        if (fileinfo == None): return None
         return fileinfo
 
     def ListFiles(self):
         # 获取文件列表
-        pass
+        filelist = self._fileList()
+        return filelist
 
     def Search(self, wd):
         # 搜索文件
@@ -537,8 +424,6 @@ class YunDisk:
         record = cu.fetchone()
         if (record[0] == 0): return []
 
-        print 'rrrrrr', fid, start, end
-
         # 取出记录
         #result = [
         #    {'pid': '', 'range': [0, 100], 'head': 82},
@@ -561,7 +446,6 @@ class YunDisk:
             result.append(block)
         cu.close()
         #
-        print 'ssssss', len(result)
         return result
 
     def _buildDownloadTask(self, blocks, start, end):
@@ -575,9 +459,6 @@ class YunDisk:
         #        {'pid': '', 'index': 1, 'range': [0, 0]}
         #    ]
         #}
-        end = int(end)
-        start = int(start)
-        print 'ppp#', start, end
         tasks = {
             'size': 0,
             'start': start,
@@ -597,22 +478,20 @@ class YunDisk:
             # 文件相对偏移量
             offsets = head
             offsete = head + be - bs
-            
+
+            # 算法没有验证过 没有做过仔细检查
             # 计算偏移量 ~乱
             if (be <= start):
                 # 1. 不在范围内
-                print 'u1', be, start
                 continue
-            elif (bs < end):
+            elif (bs < end or end < 0):
                 # 2. 落在块区间里 计算相对偏移量
                 if (bs < start): offsets += start - bs
-                if (be > end): offsete -= be - end
-            elif (bs >= end):
-                print 'u4'
+                if (be > end and end >= 0): offsete -= be - end
+            elif (bs >= end and end >= 0):
                 # 3. 不在范围内
-                pass
-            else:
-                print 'u3'
+                continue
+            else: 
                 # 4. 考虑不周
                 raise Exception()
 
@@ -621,14 +500,12 @@ class YunDisk:
             task = {'pid': pid, 'index': index, 'range': [offsets, offsete]}
             if (lastbs > 0 and lastbs != bs):
                 # 数据不连续返回空
-                print 'u2'
                 return None
             
             # 添加一条任务
             size += offsete - offsets
             tasks['tasks'].append(task)
-
-        print 'uuuu', len(tasks['tasks'])
+            
         tasks['size'] = size
         
         return tasks
@@ -647,18 +524,11 @@ class YunDisk:
         #    ]
         #}
         # 按照index排序
-
-        print 'mm', fid, len(tasks['tasks']), writer, buff
-        
-        
         size = tasks['size']
         tasklist = tasks['tasks']
         tasklist.sort(key=lambda item:item['index'], reverse=False)
         index = 0
-
-        print 'ttttt'
         for task in tasklist:
-            print 'sssss'
             # 循环任务
             index = index + 1
             pid = task['pid']
@@ -670,12 +540,9 @@ class YunDisk:
             
             url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
             headers = { 'Range': 'bytes=%d-%d' % (start, end) }
-
-            print 'nn', headers
             
             # HTTP 200 获取全部数据
             # HTTP 206 获取部分数据
-
             
             # 为了保证返回数据正确 尝试3次请求 如果得不到206结果抛出异常
             r = requests.get(url, headers = headers, stream=True)
@@ -687,50 +554,7 @@ class YunDisk:
                     r.close()
                     # 第三次请求
                     r = requests.get(url, headers = headers, stream=True)
-                    if (r.status_code != 206):
-                        r.close()
-                        raise Exception()
-
-            print 'ooooooo'
-            #
-            content_range = r.headers['Content-Range']
-            m = re.match('.* (\d+)-(\d*)/(\d+)', content_range)
-            if (m == None):
-                logging.error('error content_range: %s' % content_range)
-                break
-
-            print 'pppppp'
-            #
-            rstart = m.group(1)
-            rend = m.group(2)
-            rsize = m.group(3)
-            if (rstart != str(start)):
-                logging.error('error range start: %s -> %s' % (start, rstart))
-                break
-
-            print 'qqqqqqq'
-            
-            # 
-            for chunk in r.iter_content(chunk_size=buff):
-                # 分块下载
-                if chunk: # filter out keep-alive new chunks
-                    if (len(chunk) <= 0): print 'bad00000000000000000000'
-                    writer.write(chunk)
-                    writer.flush()
-            
-
-            '''
-            # 为了保证返回数据正确 尝试3次请求 如果得不到206结果抛出异常
-            r = requests.get(url, headers = headers, stream=True)
-            if (r.status_code != 206):
-                r.close()
-                # 第二次请求
-                r = requests.get(url, headers = headers, stream=True)
-                if (r.status_code != 206):
-                    r.close()
-                    # 第三次请求
-                    r = requests.get(url, headers = headers, stream=True)
-                    if (r.status_code != 206):
+                    if (r.status_code != 206 and r.status_code != 200):
                         r.close()
 
             # 读取数据
@@ -763,21 +587,39 @@ class YunDisk:
                             raise Exception()
                         
                         data = chunk[newstart : newend]
-                        
-                        writer.write(data)
-                        writer.flush()
-                pass
+
+                        try:
+                            writer.write(data)
+                            #writer.flush()
+                        except socket.error:
+                            logging.warning('req terminated - pid:%s' % pid)
+                            r.close()
+                            return None
+                        except Exception, ex:
+                            logging.error('%s - pid:%s' % (ex, pid))
+                            r.close()
+                            return None
+            # 读取206数据
             elif (r.status_code == 206):
                 # 返回结果200数据已经过滤好了 直接写入流里
                 for chunk in r.iter_content(chunk_size=buff):
                     # 分块下载
                     if chunk: # filter out keep-alive new chunks
-                        writer.write(chunk)
-                        writer.flush()
+                        try:
+                            writer.write(chunk)
+                            #writer.flush()
+                        except socket.error:
+                            logging.warning('req terminated - pid:%s' % pid)
+                            r.close()
+                            return None
+                        except Exception, ex:
+                            logging.error('%s - pid:%s' % (ex, pid))
+                            r.close()
+                            return None
                 
-            '''
-
             
+            
+                    
             logging.info('downloaded - pid:%s' % pid)
 
     def _fileInfo(self, fid):
@@ -797,6 +639,128 @@ class YunDisk:
             flag = record[5]
             return {'fid': fid, 'name': fname, 'size': fsize, 'path': fpath, 'date': fdate, 'flag': flag}
         else: return None
+
+    def _fileList(self):
+        # 获取文件列表
+        sql = 'select FID, FNAME, FSIZE, FPATH, FDATE, FLAG from FILES'
+        cu = self._conn.cursor()
+        cu.execute(sql)
+        records = cu.fetchall()
+        cu.close()
+        results = []
+        for row in records:
+            fid = row[0]
+            fname = row[1]
+            fsize = row[2]
+            fpath = row[3]
+            fdate = row[4]
+            flag = row[5]
+            item = {'fid': fid, 'name': fname, 'size': fsize, 'path': fpath, 'date': fdate, 'flag': flag}
+            results.append(item)
+        # 
+        return results
+
+    def _doTasksFast(self, fid, tasks, writer, buff):
+        # 下载任务
+        # fid: 文件FID
+        # tasks: 任务列表
+        # writer: 输出流
+        # buff: 每隔多少刷新一次
+        #tasks = {
+        #    'size': 0,
+        #    'start': 0,
+        #    'tasks': [
+        #        {'pid': '', 'index': 0, 'range': [0, 0]},
+        #        {'pid': '', 'index': 1, 'range': [0, 0]}
+        #    ]
+        #}
+        # 按照index排序
+        size = tasks['size']
+        tasklist = tasks['tasks']
+        tasklist.sort(key=lambda item:item['index'], reverse=False)
+
+        # 初始化多线程
+        worker = WorkerPool(self.MAX_THREADS)
+
+        # 1. 下载分块文件
+        # 2. 把分块文件拼起来
+        
+        for task in tasklist:
+            # 循环任务
+            pid = task['pid']
+            index = task['index']
+            start = task['range'][0]
+            end = task['range'][1]
+            
+            # 添加任务到线程池里
+            worker.add_job(self._downloadBlock, fid, pid, index, start, end)
+
+        # 等待线程结束
+        worker.wait_for_complete()
+
+        # 检查和拼接数据
+        result = self._unionData(fid, tasklist, writer)
+        
+
+    def _unionData(self, fid, tasks, writer):
+        # 检查块文件完整性 拼接数据
+        for task in tasks:
+            pid = task['pid']
+            index = task['index']
+            #
+            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+            if (os.path.exists(blockfile) == False): return False           # 块文件缺少
+        # 拼接数据
+        for task in tasks:
+            pid = task['pid']
+            index = task['index']
+            #
+            blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+            f = open(blockfile, 'rb')
+            data = f.read()
+            f.close()
+            writer.write(data)
+            writer.flush
+
+            # 删除块文件
+            os.remove(blockfile)
+        #
+        return True
+
+    def _downloadBlock(self, fid, pid, index, start, end):
+        # 下载文件分块线程
+        url = 'http://ww1.sinaimg.cn/large/{0}.jpg'.format(pid)
+        blockfile = '%s%s_%05d.block' % (self.OUT_PATH, fid, index)     # 块文件
+
+        # 如果已经有块文件跳过
+        if (os.path.exists(blockfile)): return True
+
+        logging.info('downloading - index:%05d fid:%s pid:%s' % (index, fid, pid))
+        
+        # 下载文件
+        headers = { 'Range': 'bytes=%d-%d' % (start, end) }
+        response = requests.get(url, headers=headers, stream=True)
+        data = response.raw.read()
+        if (response.status_code == 200):
+            # 截取有效数据
+            data = data[start : end]
+        elif (response.status_code == 206):
+            # 有效数据
+            pass
+        else:
+            # 返回结果错误
+            return False
+
+        # 检查数据长度
+        if (len(data) != end - start): return False
+
+        # 数据写入块文件
+        f = open(blockfile, 'wb')
+        f.write(data)
+        f.close()
+        return True
+        
+        
 
 ##########################################################################
 ##########################################################################
@@ -838,32 +802,28 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
         added support for partial content. i'm not surprised if http HEAD
         method would fail.
         """
+        # 解析URL里的FID
         path = self.translate_path(self.path)
+        fpath, fid = os.path.split(path)
         
-        fpath, fname = os.path.split(path)
-
-        print fpath, fname
-        
-        path = './a.mp4'
-        
-        print '1111'
-        ctype = self.guess_type(path)
-        print ctype
-
         conn = sqlite3.connect('_disk.db', check_same_thread = False)
         disk = YunDisk('', conn)
 
-        print '333'
-
-        # 获取文件长度
-        fileinfo = disk.GetMeta('9877a218a82dad5e12e3484a00c75bc1')
-        print fileinfo
+        # 查找FID
+        fileinfo = disk.GetMeta(fid)
+        if (fileinfo == None):
+            self.send_error(404, "%s was not found" % fid)
+            return None
+        #
+        fname = fileinfo['name']
         fsize = fileinfo['size']
+        fpath = fileinfo['path']
+        fdate = fileinfo['date']
+        flag = fileinfo['flag']
+        # 返回类型
+        ctype = self.guess_type(fname)
 
-        print fsize
-
-        print 'HHHHHHHHHHHH', self.headers
-        
+        # 是否包含Range
         if self.headers.get("Range"):
             # partial content all treated here.
             # we do not support If-Range request.
@@ -871,67 +831,40 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
             #   Range: bytes=9855420-
             start = self.headers.get("Range")
             try:
-                print start
                 m = re.match('.*=(\d+)-(\d*)', start)
                 pos = m.group(1)
                 end = m.group(2)
-
-                print pos, '$$$$', end
-                
             except ValueError:
                 self.send_error(400, "bad range specified.")
-                f.close()
                 return None
+            # 偏移量
+            pos = int(pos)
+            if (end == '' or end == None): end = fsize
 
-            print 'ee', fsize, pos
-            
+            # 返回206数据
             self.send_response(206)
             self.send_header("Content-type", ctype)
             self.send_header("Connection", "keep-alive")
-            print 'ddddddddd'
-            self.send_header("Content-Length", str(fsize - int(pos)))
-            print 'fff'
-            self.send_header("Content-Range", "bytes %s-%s/%s" % (pos, fsize-1, fsize))
-            print 'ggg'
+            self.send_header("Content-Length", str(end - pos))
+            self.send_header("Content-Range", "bytes %s-%s/%s" % (pos, end-1, end))
             self.end_headers()
-            print 'ccccc'
+
+            # 写数据流
             try:
-                disk.DownloadPart(self.wfile, '9877a218a82dad5e12e3484a00c75bc1', pos, -1)
+                disk.DownloadPart(self.wfile, fid, pos, -1)
             except Exception, ex:
                 print ex
                 print traceback.print_exc()
-            
-            print 'hhhh'
             return None
 
-        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-        print '$$$$$$$$$$$$$$$$$$$$$$$$$$$'
-        
-
-        #try:
-        
-        self.send_response(200)
-        print '###########################1'
-        self.send_header("Content-type", ctype)
-        print '###########################2'
-        self.send_header("Content-Length", str(fsize))
-        print '###########################3'
-        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
-        print '###########################4'
-
-        '''
-        except Exception, ex:
-            print 'bbaadd', ex
-            print traceback.print_exc()
-        '''
-
-        
-        self.end_headers()
-
-        return None
+        else:
+            # 正常返回数据200
+            self.send_response(200)
+            self.send_header("Content-type", ctype)
+            self.send_header("Content-Length", str(fsize))
+            #self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+            self.end_headers()
+            disk.DownloadPart(self.wfile, fid, 0, -1)
 
 class ThreadingServer(ThreadingMixIn, HTTPServer):
     # 多线程
@@ -950,5 +883,19 @@ def main(port, server_class=NotracebackServer, handler_class=PartialContentHandl
 if __name__ == "__main__":
     #
     port = randint(20000, 50000)
-    port = 8899
+
+    conn = sqlite3.connect('_disk.db', check_same_thread = False)
+    disk = YunDisk('', conn)
+    files = disk.ListFiles()
+
+    print "serving on: http://localhost:%s/" % (port)
+    print "===== files ====="
+
+    for f in files:
+        fid = f['fid']
+        name = f['name']
+        print "link: http://localhost:%s/%s    > %s" % (port, fid, name)
+
+    print "===== start logging =====\n"
+    
     main(port=port)
