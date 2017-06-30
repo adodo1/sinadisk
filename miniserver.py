@@ -16,6 +16,11 @@ from BaseHTTPServer import HTTPServer
 from SimpleHTTPServer import SimpleHTTPRequestHandler
 from SocketServer import ThreadingMixIn
 
+try:
+  from cStringIO import StringIO
+except ImportError:
+  from StringIO import StringIO
+
 
 __mutex = threading.Lock()        # 线程锁
 
@@ -797,6 +802,30 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
         if f:
             self.mycopy(f)
 
+    def list_files(self, path):
+        # 列出目录下的文件
+        conn = sqlite3.connect('_disk.db', check_same_thread = False)
+        disk = YunDisk('', conn)
+        f = StringIO()
+        f.write('<html>\n<title>SINA DISK</title>\n')
+        f.write('<body>')
+
+        # 列出文件
+        files = disk.ListFiles()
+        for fn in files:
+            fid = fn['fid']
+            name = fn['name']
+            f.write('<a href="./%s">%s</a><br />' %  (fid, name))
+            
+        f.write('</body></html>')
+        length = f.tell()
+        f.seek(0)
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        return f
+
     def send_head(self):
         """
         added support for partial content. i'm not surprised if http HEAD
@@ -805,6 +834,8 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
         # 解析URL里的FID
         path = self.translate_path(self.path)
         fpath, fid = os.path.split(path)
+
+        if (fid == ''): return self.list_files('')
         
         conn = sqlite3.connect('_disk.db', check_same_thread = False)
         disk = YunDisk('', conn)
@@ -873,11 +904,11 @@ class ThreadingServer(ThreadingMixIn, HTTPServer):
 def main(port, server_class=NotracebackServer, handler_class=PartialContentHandler):
     server_address = ('0.0.0.0', port)
     # 单线程
-    httpd = server_class(server_address, handler_class)
-    httpd.serve_forever()
+    #httpd = server_class(server_address, handler_class)
+    #httpd.serve_forever()
     # 多线程
-    #srvr = ThreadingServer(server_address, handler_class)
-    #srvr.serve_forever()
+    srvr = ThreadingServer(server_address, handler_class)
+    srvr.serve_forever()
 
 
 if __name__ == "__main__":
@@ -891,10 +922,10 @@ if __name__ == "__main__":
     print "serving on: http://localhost:%s/" % (port)
     print "===== files ====="
 
-    for f in files:
-        fid = f['fid']
-        name = f['name']
-        print "link: http://localhost:%s/%s    > %s" % (port, fid, name)
+    #for f in files:
+    #    fid = f['fid']
+    #    name = f['name']
+    #    print "link: http://localhost:%s/%s    > %s" % (port, fid, name)
 
     print "===== start logging =====\n"
     
