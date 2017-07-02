@@ -799,25 +799,29 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         """Serve a GET request."""
         f = self.send_head()
-        if f:
-            self.mycopy(f)
+        if f: self.mycopy(f)
 
     def list_files(self, path):
         # 列出目录下的文件
         conn = sqlite3.connect('_disk.db', check_same_thread = False)
         disk = YunDisk('', conn)
         f = StringIO()
-        f.write('<html>\n<title>SINA DISK</title>\n')
-        f.write('<body>')
+        f.write(u'<html>\n<title>SINA DISK</title>\n<body>')
 
         # 列出文件
         files = disk.ListFiles()
         for fn in files:
             fid = fn['fid']
             name = fn['name']
-            f.write('<a href="./%s">%s</a><br />' %  (fid, name))
+
+            fid = fid.encode('utf8')
+            name = name.encode('utf8')
+
+
+            f.write('<a href="./{0}">{1}</a><br />'.format(fid, name))
+            #f.write(u'<a href="./{0}">{1}</a><br />'.format(fid, name.encode('utf8')))
             
-        f.write('</body></html>')
+        f.write(u'</body></html>')
         length = f.tell()
         f.seek(0)
         self.send_response(200)
@@ -832,10 +836,10 @@ class PartialContentHandler(SimpleHTTPRequestHandler):
         method would fail.
         """
         # 解析URL里的FID
-        path = self.translate_path(self.path)
-        fpath, fid = os.path.split(path)
+        #path = self.translate_path(self.path)
+        fpath, fid = os.path.split(self.path)
 
-        if (fid == ''): return self.list_files('')
+        if (fid == '' or fid == None): return self.list_files('')
         
         conn = sqlite3.connect('_disk.db', check_same_thread = False)
         disk = YunDisk('', conn)
@@ -910,11 +914,9 @@ def main(port, server_class=NotracebackServer, handler_class=PartialContentHandl
     srvr = ThreadingServer(server_address, handler_class)
     srvr.serve_forever()
 
-
 if __name__ == "__main__":
     #
     port = randint(20000, 50000)
-
     conn = sqlite3.connect('_disk.db', check_same_thread = False)
     disk = YunDisk('', conn)
     files = disk.ListFiles()
